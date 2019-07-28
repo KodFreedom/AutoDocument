@@ -3,19 +3,24 @@
 #include <list>
 using namespace std;
 
-class ClassInfo
+namespace KodFreedom
 {
-public:
-    ClassInfo() {}
-    ~ClassInfo() {}
+    class ClassInfo
+    {
+    public:
+        ClassInfo() {}
+        ~ClassInfo() {}
 
-    void SetName(const string& name);
-    void AddInheritance(const string& name);
-    void Output() const;
+        void SetName(const string& name);
+        void SetClassComment(const list<string>& comment);
+        void AddInheritance(const string& name);
+        void Output() const;
 
-    const string& Name() const { return m_name; }
+        const string& Name() const { return m_name; }
 
-private:
-    string m_name = {}; // クラス名
-    list<string> m_inheritances = {}; // 継承クラス
-};
+    private:
+        list<string> m_class_comment = {}; // クラスのコメント
+        string       m_name = {}; // クラス名
+        list<string> m_inheritances = {}; // 継承クラス
+    };
+}

@@ -1,9 +1,9 @@
-#include <fstream>
 #include <iostream>
 #include <assert.h>
-#include <algorithm>
 #include "auto_document.h"
 #include "class_info.h"
+#include "utility.h"
+using namespace KodFreedom;
 
 //----------------------------------------------------------------------
 // Public
@@ -47,85 +47,72 @@ void AutoDocument::Analyze(ifstream& file)
 bool AutoDocument::FindClass(ifstream& file)
 {
     LineInfo line_info;
-    while (GetLineUntil(file, "class", line_info))
+    while (GetLineUntil(file, { "class" }, line_info))
     {
-        if (line_info.buffer.find(';') != string::npos)
-        {// 前方宣言
-            continue;
-        }
+        if (!IsClass(file, line_info)) continue;
 
-        string check(line_info.buffer.begin(), line_info.buffer.begin() + line_info.pos);
-        if (check.find_first_not_of(' ') != string::npos)
-        {// classの前にスペース以外のものがある
-            continue;
-        }
-
-        // クラス情報を作成
-        ClassInfo* class_info = new ClassInfo();
-        m_classes.push_back(class_info);
-
-        if (line_info.buffer.find('{') == string::npos)
+        auto& current_line = line_info.log.back();
+        if (current_line.find('{') == string::npos)
         {// 改行した、「{」までチェックする
-            string buffer2;
-            buffer2.resize(sc_line_max);
-            file.getline(&buffer2[0], sc_line_max);
-            assert(buffer2.find('{') != string::npos);
+            LineInfo line_info2;
+            if (GetLineUntil(file, { "{" }, line_info2))
+            {
+                assert(line_info2.comment.size() == 0);
+                for (auto& line : line_info2.log)
+                {
+                    current_line += line;
+                }
+            }
         }
 
         // 階層カウントする
         ++m_curly_bracket_counter;
 
-        // クラス名と継承を解析する
-        AnalyzeClassNameAndInherits(line_info.buffer);
+        // クラス情報を作成
+        ClassInfo* class_info = new ClassInfo();
+        m_classes.push_back(class_info);
+        class_info->SetClassComment(line_info.comment);
 
+        // クラス名と継承を解析する
+        AnalyzeClassNameAndInherits(current_line);
         return true;
     }
     return false;
 }
 
-bool AutoDocument::GetLineUntil(ifstream& file, const string& keyword, LineInfo& out_line_info)
+bool AutoDocument::GetLineUntil(ifstream& file, const list<string>& keywords, LineInfo& out_line_info)
 {
-    out_line_info.pos = string::npos;
-    out_line_info.buffer.clear();
     out_line_info.log.clear();
     out_line_info.comment.clear();
     int comment_step = 0; // /*式コメントを検出するため
     size_t comment_stop_counter = 0; // 連続コメント検出
-    size_t comment_continue_counter = 0; // 連続コメント検出
 
     while (!file.eof())
     {
         // Line取得
-        string buffer;
-        buffer.resize(sc_line_max);
-        file.getline(&buffer[0], sc_line_max);
-
-        // \0消す
-        auto begin = std::remove(buffer.begin(), buffer.end(), '\0');
-        if (begin != buffer.end())
-        {
-            buffer.erase(begin, buffer.end());
-        }
+        string buffer = Utility::GetLine(file);
 
         // ログに保存
         out_line_info.log.push_back(buffer); 
 
         // comment check
-        int result = AnalyzeComment(buffer);
+        int result = Utility::IsComment(buffer);
         if (result < INT_MAX)
         {
             if (comment_stop_counter > 1)
             {// コメント中断したので、前のやつを捨てる
                 comment_stop_counter = 0;
-                comment_continue_counter = 0;
                 out_line_info.comment.clear();
             }
 
             comment_step += result;
             assert(comment_step >= 0);
             out_line_info.comment.push_back(buffer);
-            ++comment_continue_counter;
-            if (comment_step > 0) continue; // コメント中
+            continue; // コメント中
+        }
+        else if (comment_step > 0)
+        {// /*中
+            continue;
         }
         else
         {
@@ -133,47 +120,31 @@ bool AutoDocument::GetLineUntil(ifstream& file, const string& keyword, LineInfo&
         }
 
         // keyword check
-        out_line_info.pos = buffer.find(keyword);
-        if (out_line_info.pos != string::npos)
+        for (auto& keyword : keywords)
         {
-            out_line_info.buffer = buffer;
-            return true;
+            if (buffer.find(keyword) != string::npos)
+            {
+                return true;
+            }
         }
     }
     return false;
 }
 
-int AutoDocument::AnalyzeComment(string& buffer)
+bool AutoDocument::IsClass(ifstream& file, LineInfo& line_info)
 {
-    size_t pos_1 = buffer.find("//");
-    // TODO : /**/の対応
-    //size_t pos_2 = buffer.find("/*");
-    //size_t pos_3 = buffer.find("*/");
-
-    if (pos_1 != string::npos)
-    {
-        return 0;
-    }
-
-    //if (pos_3 != string::npos && pos_2 != string::npos)
-    //{
-    //    return 0;
-    //}
-
-    return INT_MAX;
-}
-
-void AutoDocument::DeleteKeywordsFromString(const list<string>& keywords, string& buffer)
-{
-    for (auto& keyword : keywords)
-    {
-        while (1)
+    auto& current_line = line_info.log.back();
+    if (current_line.find("template") != string::npos)
+    {// template classかも、次の行を検出してみる
+        string buffer = Utility::GetLine(file);
+        if (Utility::IsClass(buffer))
         {
-            size_t pos = buffer.find(keyword);
-            if (pos == string::npos) break;
-            buffer.erase(pos, keyword.size());
+            line_info.log.push_back(buffer);
+            return true;
         }
+        return false;
     }
+    return Utility::IsClass(current_line);
 }
 
 void AutoDocument::AnalyzeClassNameAndInherits(string& buffer)
@@ -181,7 +152,7 @@ void AutoDocument::AnalyzeClassNameAndInherits(string& buffer)
     ClassInfo* class_info = m_classes.back();
 
     // いらない符号を消す
-    DeleteKeywordsFromString({ " ", "{","class" }, buffer);
+    Utility::DeleteKeywordsFromString({ " ", "{","class" }, buffer);
     
     size_t pos = buffer.find(':');
     if (pos != string::npos)
